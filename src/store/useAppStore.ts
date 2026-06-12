@@ -1,11 +1,12 @@
 import { create } from 'zustand';
-import type { Project, ProjectWithVariables, Variable, SimulationResult } from '../../shared/types.js';
+import type { Project, ProjectWithVariables, Variable, SimulationResult, SimulationJob } from '../../shared/types.js';
 
 interface AppState {
   projects: Array<Project & { variableCount: number; simulationCount: number; lastSimulationAt: string | null }>;
   currentProject: ProjectWithVariables | null;
   simulations: SimulationResult[];
   currentSimulation: SimulationResult | null;
+  queueJobs: SimulationJob[];
   loading: boolean;
   error: string | null;
   setLoading: (v: boolean) => void;
@@ -19,6 +20,11 @@ interface AppState {
   setCurrentSimulation: (s: SimulationResult | null) => void;
   addSimulation: (s: SimulationResult) => void;
   removeSimulation: (id: string) => void;
+  setQueueJobs: (jobs: SimulationJob[]) => void;
+  updateQueueJob: (job: SimulationJob) => void;
+  addQueueJob: (job: SimulationJob) => void;
+  removeQueueJob: (id: string) => void;
+  clearFinishedQueueJobs: () => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -26,6 +32,7 @@ export const useAppStore = create<AppState>((set) => ({
   currentProject: null,
   simulations: [],
   currentSimulation: null,
+  queueJobs: [],
   loading: false,
   error: null,
   setLoading: (v) => set({ loading: v }),
@@ -59,5 +66,28 @@ export const useAppStore = create<AppState>((set) => ({
     set((st) => ({
       simulations: st.simulations.filter((s) => s.id !== id),
       currentSimulation: st.currentSimulation?.id === id ? null : st.currentSimulation,
+    })),
+  setQueueJobs: (jobs) => set({ queueJobs: jobs }),
+  updateQueueJob: (job) =>
+    set((s) => {
+      if (s.queueJobs.some(j => j.id === job.id)) {
+        return { queueJobs: s.queueJobs.map(j => (j.id === job.id ? job : j)) };
+      }
+      return { queueJobs: [...s.queueJobs, job] };
+    }),
+  addQueueJob: (job) =>
+    set((s) => {
+      if (s.queueJobs.some(j => j.id === job.id)) {
+        return { queueJobs: s.queueJobs.map(j => (j.id === job.id ? job : j)) };
+      }
+      return { queueJobs: [...s.queueJobs, job] };
+    }),
+  removeQueueJob: (id) =>
+    set((s) => ({
+      queueJobs: s.queueJobs.filter((j) => j.id !== id),
+    })),
+  clearFinishedQueueJobs: () =>
+    set((s) => ({
+      queueJobs: s.queueJobs.filter((j) => j.status === 'queued' || j.status === 'running'),
     })),
 }));

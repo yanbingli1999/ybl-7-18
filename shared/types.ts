@@ -109,6 +109,24 @@ export interface UpdateVariableDto {
   unit?: string;
 }
 
+export type SimulationJobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface SimulationJob {
+  id: string;
+  projectId: string;
+  iterations: number;
+  threshold: number;
+  runName?: string;
+  status: SimulationJobStatus;
+  progress: number;
+  startedAt?: string;
+  completedAt?: string;
+  elapsedMs?: number;
+  estimatedRemainingMs?: number;
+  result?: SimulationResult;
+  error?: string;
+}
+
 export interface RunSimulationDto {
   iterations: number;
   threshold: number;

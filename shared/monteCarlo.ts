@@ -155,6 +155,88 @@ export interface SimulateOptions {
   iterations: number;
   threshold: number;
   runName?: string;
+  signal?: AbortSignal;
+  onProgress?: (progress: number) => void;
+  batchSize?: number;
+}
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+export async function runMonteCarloSimulationAsync(
+  projectId: string,
+  variables: Variable[],
+  options: SimulateOptions
+): Promise<SimulationResult> {
+  const { iterations, threshold, runName, signal, onProgress, batchSize = 500 } = options;
+
+  const variableSamples: Record<string, number[]> = {};
+  variables.forEach(v => {
+    variableSamples[v.id] = new Array(iterations);
+  });
+
+  const results = new Array(iterations);
+
+  for (let batchStart = 0; batchStart < iterations; batchStart += batchSize) {
+    if (signal?.aborted) {
+      throw new DOMException('Simulation cancelled', 'AbortError');
+    }
+
+    const batchEnd = Math.min(batchStart + batchSize, iterations);
+
+    for (let i = batchStart; i < batchEnd; i++) {
+      let iterResult = 0;
+      for (const v of variables) {
+        const sample = sampleTriangular(v.min, v.mostLikely, v.max);
+        variableSamples[v.id][i] = sample;
+        iterResult += sample * v.weight;
+      }
+      results[i] = iterResult;
+    }
+
+    const progress = Math.round((batchEnd / iterations) * 100);
+    onProgress?.(progress);
+
+    if (batchEnd < iterations) {
+      await yieldToEventLoop();
+    }
+  }
+
+  if (signal?.aborted) {
+    throw new DOMException('Simulation cancelled', 'AbortError');
+  }
+
+  const sortedResults = [...results].sort((a, b) => a - b);
+  const mean = calcMean(results);
+  const median = calcMedian(sortedResults);
+  const stdDev = calcStdDev(results, mean);
+  const percentiles = calcPercentiles(sortedResults);
+  const lossProb = calcLossProbability(results, threshold);
+  const var95 = percentiles.p5;
+  const histogram = buildHistogram(results);
+  const sensitivity = calcSensitivity(variables, variableSamples, results);
+
+  return {
+    id: uuidv4(),
+    projectId,
+    runName: runName || `运行 ${new Date().toLocaleString('zh-CN')}`,
+    iterations,
+    timestamp: new Date().toISOString(),
+    mean,
+    median,
+    stdDev,
+    min: sortedResults[0],
+    max: sortedResults[sortedResults.length - 1],
+    percentiles,
+    lossProbability: lossProb,
+    var95,
+    threshold,
+    histogram,
+    sensitivity,
+    samples: results,
+    variableSamples,
+  };
 }
 
 export function runMonteCarloSimulation(

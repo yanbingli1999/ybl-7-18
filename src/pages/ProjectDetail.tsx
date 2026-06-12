@@ -1,19 +1,20 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, Plus, Trash2, Play, RefreshCw, BarChart3, AlertTriangle,
+  ArrowLeft, Plus, Trash2, Play, BarChart3, AlertTriangle,
   TrendingUp, Target, Layers, History, GitCompare, Pencil, X, Save,
-  Clock, DollarSign, Calendar, Settings, Info, Sparkles,
+  Clock, DollarSign, Settings, Info, Sparkles,
 } from 'lucide-react';
-import { api } from '@/lib/api';
+import { api, createSSEConnection } from '@/lib/api';
 import { useAppStore } from '@/store/useAppStore';
 import { formatNumber, formatPercentage } from '../../shared/monteCarlo.js';
-import type { VariableType, CreateVariableDto, UpdateVariableDto, SimulationResult } from '../../shared/types.js';
+import type { VariableType, CreateVariableDto, UpdateVariableDto, SimulationJob } from '../../shared/types.js';
 import HistogramChart from '@/components/HistogramChart';
 import SensitivityChart from '@/components/SensitivityChart';
 import StatsCards from '@/components/StatsCards';
 import SimulationHistory from '@/components/SimulationHistory';
 import CompareModal from '@/components/CompareModal';
+import SimulationQueuePanel from '@/components/SimulationQueuePanel';
 
 const VARIABLE_TYPE_CONFIG: Record<VariableType, { label: string; color: string; icon: any; defaultWeight: number; defaultUnit: string }> = {
   cost: { label: '成本', color: 'bg-red-500/20 text-red-300 border-red-500/40', icon: DollarSign, defaultWeight: -1, defaultUnit: '万元' },
@@ -25,15 +26,14 @@ const VARIABLE_TYPE_CONFIG: Record<VariableType, { label: string; color: string;
 export default function ProjectDetail() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
-  const { currentProject, simulations, currentSimulation, setCurrentProject, setSimulations, addVariable, updateVariable, removeVariable, addSimulation, removeSimulation, setCurrentSimulation, setLoading, setError } = useAppStore();
+  const { currentProject, simulations, currentSimulation, queueJobs, setCurrentProject, setSimulations, addVariable, updateVariable, removeVariable, addSimulation, removeSimulation, setCurrentSimulation, setLoading, setError, setQueueJobs, updateQueueJob, addQueueJob, removeQueueJob, clearFinishedQueueJobs } = useAppStore();
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showVarModal, setShowVarModal] = useState(false);
   const [showCompareModal, setShowCompareModal] = useState(false);
-  const [running, setRunning] = useState(false);
   const [iterations, setIterations] = useState(10000);
   const [threshold, setThreshold] = useState(0);
-  const [runProgress, setRunProgress] = useState(0);
+  const sseRef = useRef<EventSource | null>(null);
 
   const [varForm, setVarForm] = useState<Partial<any>>({
     name: '', type: 'custom' as VariableType, min: '', max: '', mostLikely: '', weight: '', unit: '',
@@ -47,6 +47,8 @@ export default function ProjectDetail() {
       setCurrentProject(project);
       const sims = await api.simulations.listByProject(id);
       setSimulations(sims);
+      const queueData = await api.simulations.queue.list(id);
+      setQueueJobs(queueData);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败');
       alert('加载项目失败');
@@ -56,9 +58,39 @@ export default function ProjectDetail() {
     }
   };
 
+  const handleSSEEvent = useCallback((event: string, data: SimulationJob) => {
+    if (data.projectId !== id) return;
+
+    switch (event) {
+      case 'job-queued':
+      case 'job-started':
+      case 'job-progress':
+      case 'job-cancelled':
+      case 'job-failed':
+        updateQueueJob(data);
+        break;
+      case 'job-completed':
+        updateQueueJob(data);
+        if (data.result) {
+          addSimulation(data.result);
+        }
+        break;
+    }
+  }, [id, updateQueueJob, addSimulation]);
+
   useEffect(() => {
     loadProject();
-    return () => setCurrentProject(null);
+
+    const es = createSSEConnection(handleSSEEvent);
+    sseRef.current = es;
+
+    return () => {
+      setCurrentProject(null);
+      if (sseRef.current) {
+        sseRef.current.close();
+        sseRef.current = null;
+      }
+    };
   }, [id]);
 
   const handleAddVariable = async (e: React.FormEvent) => {
@@ -131,21 +163,19 @@ export default function ProjectDetail() {
       alert('请先添加至少一个变量');
       return;
     }
-    setRunning(true);
-    setRunProgress(0);
     try {
-      const interval = setInterval(() => {
-        setRunProgress(p => Math.min(p + Math.random() * 15, 85));
-      }, 150);
-      const result = await api.simulations.run(id, { iterations, threshold });
-      clearInterval(interval);
-      setRunProgress(100);
-      addSimulation(result);
-      setTimeout(() => setRunProgress(0), 800);
+      const job = await api.simulations.run(id, { iterations, threshold });
+      addQueueJob(job);
     } catch (err) {
-      alert(err instanceof Error ? err.message : '模拟失败');
-    } finally {
-      setRunning(false);
+      alert(err instanceof Error ? err.message : '提交模拟失败');
+    }
+  };
+
+  const handleCancelJob = async (jobId: string) => {
+    try {
+      await api.simulations.queue.cancel(jobId);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '取消失败');
     }
   };
 
@@ -340,7 +370,6 @@ export default function ProjectDetail() {
                         step={100}
                         value={iterations}
                         onChange={e => setIterations(Number(e.target.value))}
-                        disabled={running}
                         className="flex-1 accent-monte-accent"
                       />
                       <div className="w-24">
@@ -348,7 +377,6 @@ export default function ProjectDetail() {
                           type="number"
                           value={iterations}
                           onChange={e => setIterations(Math.max(100, Math.min(100000, Number(e.target.value))))}
-                          disabled={running}
                           className="input font-mono !py-1.5 text-right"
                         />
                       </div>
@@ -361,41 +389,24 @@ export default function ProjectDetail() {
                       step="any"
                       value={threshold}
                       onChange={e => setThreshold(Number(e.target.value))}
-                      disabled={running}
                       className="input font-mono"
                     />
                   </div>
                 </div>
 
-                {running && runProgress > 0 && (
-                  <div className="h-2 bg-monte-bg rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-monte-accent to-monte-accent2 transition-all duration-200"
-                      style={{ width: `${runProgress}%` }}
-                    />
-                  </div>
-                )}
-
                 <button
                   onClick={handleRunSimulation}
-                  disabled={running || currentProject.variables.length === 0}
+                  disabled={currentProject.variables.length === 0}
                   className={`w-full py-3 rounded-xl font-semibold text-white transition-all flex items-center justify-center gap-2 ${
-                    running || currentProject.variables.length === 0
+                    currentProject.variables.length === 0
                       ? 'bg-monte-border cursor-not-allowed opacity-60'
                       : 'bg-gradient-to-r from-monte-accent via-monte-accent2 to-purple-500 hover:shadow-glow hover:-translate-y-0.5 active:translate-y-0'
                   }`}
                 >
-                  {running ? (
-                    <>
-                      <RefreshCw className="w-5 h-5 animate-spin" />
-                      模拟运行中 ({formatNumber(runProgress, 0)}%)
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-5 h-5 fill-current" />
-                      运行蒙特卡洛模拟 ({formatNumber(iterations, 0)} 次)
-                    </>
-                  )}
+                  <>
+                    <Play className="w-5 h-5 fill-current" />
+                    运行蒙特卡洛模拟 ({formatNumber(iterations, 0)} 次)
+                  </>
                 </button>
 
                 {currentProject.variables.length === 0 && (
@@ -406,6 +417,13 @@ export default function ProjectDetail() {
                 )}
               </div>
             </div>
+
+            <SimulationQueuePanel
+              jobs={queueJobs}
+              onCancel={handleCancelJob}
+              onDismiss={removeQueueJob}
+              onClearFinished={clearFinishedQueueJobs}
+            />
 
             <SimulationHistory
               simulations={simulations}

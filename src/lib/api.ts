@@ -1,7 +1,7 @@
 import type {
   Project, ProjectWithVariables, Variable, SimulationResult, CompareRecord,
   CreateProjectDto, UpdateProjectDto, CreateVariableDto, UpdateVariableDto,
-  RunSimulationDto, CreateCompareDto,
+  RunSimulationDto, CreateCompareDto, SimulationJob,
 } from '../../shared/types.js';
 
 const API_BASE = '/api';
@@ -16,6 +16,22 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     throw new Error((data as { error?: string }).error || `请求失败 (${res.status})`);
   }
   return data as T;
+}
+
+export type SSEEventHandler = (event: string, data: SimulationJob) => void;
+
+export function createSSEConnection(onEvent: SSEEventHandler): EventSource {
+  const es = new EventSource(`${API_BASE}/simulations/queue/events`);
+  const eventTypes = ['job-queued', 'job-started', 'job-progress', 'job-completed', 'job-cancelled', 'job-failed'];
+  eventTypes.forEach(type => {
+    es.addEventListener(type, (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data) as SimulationJob;
+        onEvent(type, data);
+      } catch {}
+    });
+  });
+  return es;
 }
 
 export const api = {
@@ -37,8 +53,12 @@ export const api = {
     listByProject: (projectId: string) => request<SimulationResult[]>(`/simulations/project/${projectId}`),
     get: (id: string) => request<SimulationResult>(`/simulations/${id}`),
     run: (projectId: string, dto: RunSimulationDto) =>
-      request<SimulationResult>(`/simulations/project/${projectId}`, { method: 'POST', body: JSON.stringify(dto) }),
+      request<SimulationJob>(`/simulations/project/${projectId}`, { method: 'POST', body: JSON.stringify(dto) }),
     remove: (id: string) => request<{ success: boolean }>(`/simulations/${id}`, { method: 'DELETE' }),
+    queue: {
+      list: (projectId: string) => request<SimulationJob[]>(`/simulations/queue/${projectId}`),
+      cancel: (jobId: string) => request<{ success: boolean; job: SimulationJob }>(`/simulations/queue/job/${jobId}`, { method: 'DELETE' }),
+    },
   },
   compare: {
     listByProject: (projectId: string) => request<CompareRecord[]>(`/compare/project/${projectId}`),
