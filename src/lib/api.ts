@@ -58,6 +58,7 @@ export const api = {
     queue: {
       list: (projectId: string) => request<SimulationJob[]>(`/simulations/queue/${projectId}`),
       cancel: (jobId: string) => request<{ success: boolean; job: SimulationJob }>(`/simulations/queue/job/${jobId}`, { method: 'DELETE' }),
+      clearFinished: (projectId: string) => request<{ success: boolean }>(`/simulations/queue/clear/${projectId}`, { method: 'DELETE' }),
     },
   },
   compare: {

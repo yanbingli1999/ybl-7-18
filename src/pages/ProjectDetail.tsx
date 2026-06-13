@@ -172,10 +172,26 @@ export default function ProjectDetail() {
   };
 
   const handleCancelJob = async (jobId: string) => {
+    const job = queueJobs.find(j => j.id === jobId);
+    if (!job) return;
+
+    const prevStatus = job.status;
+    updateQueueJob({ ...job, status: 'cancelled', completedAt: new Date().toISOString() });
+
     try {
       await api.simulations.queue.cancel(jobId);
     } catch (err) {
+      updateQueueJob({ ...job, status: prevStatus });
       alert(err instanceof Error ? err.message : '取消失败');
+    }
+  };
+
+  const handleClearFinished = async () => {
+    clearFinishedQueueJobs();
+    try {
+      await api.simulations.queue.clearFinished(id);
+    } catch (err) {
+      console.error('清除已完成任务失败:', err);
     }
   };
 
@@ -422,7 +438,7 @@ export default function ProjectDetail() {
               jobs={queueJobs}
               onCancel={handleCancelJob}
               onDismiss={removeQueueJob}
-              onClearFinished={clearFinishedQueueJobs}
+              onClearFinished={handleClearFinished}
             />
 
             <SimulationHistory

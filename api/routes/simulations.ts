@@ -182,6 +182,11 @@ router.get('/queue/:projectId', (req: Request, res: Response) => {
   res.json(jobs);
 });
 
+router.delete('/queue/clear/:projectId', (req: Request, res: Response) => {
+  queue.removeCompletedJobs(req.params.projectId);
+  res.json({ success: true });
+});
+
 router.delete('/queue/job/:jobId', (req: Request, res: Response) => {
   const job = queue.cancel(req.params.jobId);
   if (!job) {
